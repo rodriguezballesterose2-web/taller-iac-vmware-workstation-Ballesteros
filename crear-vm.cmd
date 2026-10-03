@@ -43,9 +43,18 @@ if errorlevel 1 (
     echo [ERROR] --name solo admite letras, numeros, punto, guion y guion bajo: "!VM_NAME!"
     exit /b 2
 )
-call :checknum "--cpus" "!VM_CPUS!" || exit /b 2
-call :checknum "--mem"  "!VM_MEM!"  || exit /b 2
-call :checknum "--disk" "!VM_DISK!" || exit /b 2
+for %%K in (cpus mem disk) do (
+    echo(!VM_%%K!| findstr /r /x "[0-9][0-9]*" >nul
+    if errorlevel 1 (
+        echo [ERROR] --%%K debe ser un entero positivo: !VM_%%K!
+        exit /b 2
+    )
+    echo(!VM_%%K!| findstr /r /x "0*" >nul
+    if not errorlevel 1 (
+        echo [ERROR] --%%K debe ser mayor que cero: !VM_%%K!
+        exit /b 2
+    )
+)
 if /i not "!VM_NET!"=="nat" if /i not "!VM_NET!"=="bridged" if /i not "!VM_NET!"=="hostonly" (
     echo [ERROR] --net debe ser nat, bridged o hostonly: "!VM_NET!"
     exit /b 2
@@ -123,7 +132,71 @@ if errorlevel 1 (
     exit /b 1
 )
 
-echo [OK] Carpeta y disco creados. Falta generar el .vmx en el siguiente paso.
+REM ---- [4/7] Generar archivo de configuracion .vmx ----
+echo [4/7] Generando archivo de configuracion...
+> "!VMX!" (
+    echo .encoding = "windows-1252"
+    echo config.version = "8"
+    echo virtualHW.version = "16"
+    echo displayName = "!VM_NAME!"
+    echo guestOS = "ubuntu-64"
+    echo memsize = "!VM_MEM!"
+    echo numvcpus = "!VM_CPUS!"
+    echo scsi0.present = "TRUE"
+    echo scsi0.virtualDev = "lsilogic"
+    echo scsi0:0.present = "TRUE"
+    echo scsi0:0.fileName = "!VM_NAME!.vmdk"
+    echo ethernet0.present = "TRUE"
+    echo ethernet0.virtualDev = "e1000"
+    echo ethernet0.connectionType = "!VM_NET!"
+    echo ethernet0.addressType = "generated"
+    echo uuid.action = "create"
+)
+if defined VM_ISO (
+    >> "!VMX!" echo ide1:0.present = "TRUE"
+    >> "!VMX!" echo ide1:0.deviceType = "cdrom-image"
+    >> "!VMX!" echo ide1:0.fileName = "!VM_ISO!"
+    >> "!VMX!" echo ide1:0.startConnected = "TRUE"
+)
+if not exist "!VMX!" (
+    echo [ERROR] No se genero el archivo .vmx
+    exit /b 1
+)
+
+REM ---- [5/7] Registro: en Workstation no se registra, se abre el .vmx ----
+echo [5/7] Registro: Workstation no requiere registrar la VM; basta abrir el .vmx
+
+REM ---- [6/7] Encender la VM solo si se pidio --start ----
+if "!DO_START!"=="1" (
+    echo [6/7] Encendiendo la VM...
+    "!VMRUN!" -T ws start "!VMX!"
+    if errorlevel 1 (
+        echo [ERROR] No se pudo encender la VM.
+        exit /b 1
+    )
+) else (
+    echo [6/7] Encendido omitido ^(use --start para encender^)
+)
+
+REM ---- [7/7] Validar resultado ----
+echo [7/7] Validando...
+if not exist "!VMX!" (
+    echo [ERROR] Falta el archivo .vmx
+    exit /b 1
+)
+if not exist "!VMDK!" (
+    echo [ERROR] Falta el disco .vmdk
+    exit /b 1
+)
+echo [OK] VM creada: !VMX!
+if "!DO_START!"=="1" (
+    "!VMRUN!" -T ws list | findstr /i /c:"!VMX!" >nul
+    if errorlevel 1 (
+        echo [ERROR] La VM no aparece en ejecucion.
+        exit /b 1
+    )
+    echo [OK] La VM esta en ejecucion.
+)
 exit /b 0
 
 REM ---- Ayuda ----
@@ -143,18 +216,4 @@ echo   --dry-run       Simula sin crear nada
 echo   --force         Permite recrear una VM existente
 echo   -h, --help      Muestra esta ayuda
 echo.
-exit /b 0
-
-REM ---- Subrutina: valida entero positivo ----
-:checknum
-echo(%~2| findstr /r /x "[0-9][0-9]*" >nul
-if errorlevel 1 (
-    echo [ERROR] %~1 debe ser un entero positivo: %~2
-    exit /b 2
-)
-echo(%~2| findstr /r /x "0*" >nul
-if not errorlevel 1 (
-    echo [ERROR] %~1 debe ser mayor que cero: %~2
-    exit /b 2
-)
 exit /b 0
